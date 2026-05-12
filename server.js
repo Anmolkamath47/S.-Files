@@ -20,8 +20,10 @@ app.get("/api/photos", (req, res) => {
       ...item,
       src: photosStore.photos[item.id] || null
     }));
+    console.log(`[GET] Returning ${photos.length} photos`);
     res.json(photos);
   } catch (error) {
+    console.error("[GET] Error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -31,8 +33,16 @@ app.post("/api/photos", (req, res) => {
   try {
     const { id, name, ts, userId, username, imageData } = req.body;
     
+    console.log(`[UPLOAD] Received: id=${id}, size=${imageData?.length || 0} bytes`);
+    
     if (!id || !imageData) {
-      return res.status(400).json({ error: "Missing required fields" });
+      console.log(`[UPLOAD] Failed: Missing required fields`);
+      return res.status(400).json({ error: "Missing required fields (id, imageData)" });
+    }
+
+    if (imageData.length > 10 * 1024 * 1024) {
+      console.log(`[UPLOAD] Failed: Image too large (${imageData.length} bytes)`);
+      return res.status(413).json({ error: "Image data too large (max 10MB)" });
     }
 
     // Store photo data
@@ -47,8 +57,10 @@ app.post("/api/photos", (req, res) => {
       username: username || "Anonymous"
     });
 
+    console.log(`[UPLOAD] Success: ${id} uploaded by ${username}`);
     res.json({ success: true, id });
   } catch (error) {
+    console.error("[UPLOAD] Error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -64,8 +76,10 @@ app.delete("/api/photos/:id", (req, res) => {
     // Remove photo data
     delete photosStore.photos[id];
 
+    console.log(`[DELETE] Photo ${id} deleted`);
     res.json({ success: true });
   } catch (error) {
+    console.error("[DELETE] Error:", error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -207,8 +207,10 @@ export default function FilesApp() {
         ? '/api/photos'
         : `${API_URL}/api/photos`;
       
-      const res = await fetch(apiUrl, { mode: "cors" });
-      if (!res.ok) throw new Error("Failed to fetch photos");
+      console.log('Loading photos from:', apiUrl);
+      
+      const res = await fetch(apiUrl);
+      if (!res.ok) throw new Error(`Failed to fetch photos: ${res.status}`);
       
       const allPhotos = (await res.json()).reverse();
       
@@ -274,9 +276,12 @@ export default function FilesApp() {
       const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
       // Determine API endpoint based on environment
-      const apiUrl = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-        ? '/api/photos'
-        : `${API_URL}/api/photos`;
+      const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      const apiUrl = isLocalhost
+        ? `${API_URL}/api/photos`
+        : '/api/photos';
+
+      console.log('Upload endpoint:', apiUrl, 'Localhost:', isLocalhost);
 
       // Upload directly to API server
       const uploadRes = await fetch(apiUrl, {
@@ -289,18 +294,23 @@ export default function FilesApp() {
           userId: currentUserId,
           username: username,
           imageData: compressed
-        }),
-        mode: "cors"
+        })
       });
 
       if (!uploadRes.ok) {
-        throw new Error("Failed to upload to server");
+        const errText = await uploadRes.text();
+        console.error('Upload failed:', uploadRes.status, errText);
+        throw new Error(`Upload failed (${uploadRes.status}): ${errText.slice(0, 100)}`);
       }
+
+      const result = await uploadRes.json();
+      console.log('Upload successful:', result);
 
       setPreview(null);
       setPrevName("");
       await loadPhotos();
     } catch (e) {
+      console.error('Upload error:', e);
       setError(e?.message || "Upload failed. Please try again.");
     } finally {
       setUploading(false);
