@@ -32,7 +32,17 @@ function setUsername(name) {
 }
 
 // ── API Configuration ────────────────────────────────────────────────────────
-const API_URL = "http://localhost:3000";
+// Detect environment and set correct API URL
+const getApiUrl = () => {
+  // If running on Vercel deployed URL
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return window.location.origin; // Use same origin (Vercel deployment)
+  }
+  // Local development
+  return "http://localhost:3000";
+};
+
+const API_URL = getApiUrl();
 
 // ── Storage adapter: Use API server → localStorage fallback ──────────────────
 const store = {
@@ -193,7 +203,11 @@ export default function FilesApp() {
 
   const loadPhotos = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/photos`, { mode: "cors" });
+      const apiUrl = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+        ? '/api/photos'
+        : `${API_URL}/api/photos`;
+      
+      const res = await fetch(apiUrl, { mode: "cors" });
       if (!res.ok) throw new Error("Failed to fetch photos");
       
       const allPhotos = (await res.json()).reverse();
@@ -259,8 +273,13 @@ export default function FilesApp() {
       const compressed = await compress(preview);
       const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
+      // Determine API endpoint based on environment
+      const apiUrl = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+        ? '/api/photos'
+        : `${API_URL}/api/photos`;
+
       // Upload directly to API server
-      const uploadRes = await fetch(`${API_URL}/api/photos`, {
+      const uploadRes = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
