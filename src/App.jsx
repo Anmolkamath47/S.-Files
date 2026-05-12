@@ -34,15 +34,24 @@ function setUsername(name) {
 // ── API Configuration ────────────────────────────────────────────────────────
 // Detect environment and set correct API URL
 const getApiUrl = () => {
-  // If running on Vercel deployed URL
-  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return window.location.origin; // Use same origin (Vercel deployment)
+  if (typeof window === 'undefined') return "http://localhost:3000";
+  
+  const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  
+  console.log('[API] Hostname:', hostname, 'IsLocalhost:', isLocalhost);
+  
+  // If localhost, use local server
+  if (isLocalhost) {
+    return "http://localhost:3000";
   }
-  // Local development
-  return "http://localhost:3000";
+  
+  // If deployed (Vercel, etc), use current origin
+  return window.location.origin;
 };
 
 const API_URL = getApiUrl();
+console.log('[API] Using API URL:', API_URL);
 
 // ── Storage adapter: Use API server → localStorage fallback ──────────────────
 const store = {
@@ -203,16 +212,14 @@ export default function FilesApp() {
 
   const loadPhotos = useCallback(async () => {
     try {
-      const apiUrl = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-        ? '/api/photos'
-        : `${API_URL}/api/photos`;
+      const url = `${API_URL}/api/photos`;
+      console.log('[LOAD] Fetching from:', url);
       
-      console.log('Loading photos from:', apiUrl);
-      
-      const res = await fetch(apiUrl);
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`Failed to fetch photos: ${res.status}`);
       
       const allPhotos = (await res.json()).reverse();
+      console.log('[LOAD] Got photos:', allPhotos.length);
       
       // Filter out any null/invalid photos
       const validPhotos = allPhotos.filter(p => p && p.src && p.id);
@@ -275,16 +282,11 @@ export default function FilesApp() {
       const compressed = await compress(preview);
       const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-      // Determine API endpoint based on environment
-      const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-      const apiUrl = isLocalhost
-        ? `${API_URL}/api/photos`
-        : '/api/photos';
-
-      console.log('Upload endpoint:', apiUrl, 'Localhost:', isLocalhost);
+      const url = `${API_URL}/api/photos`;
+      console.log('[UPLOAD] Uploading to:', url, 'Size:', compressed.length);
 
       // Upload directly to API server
-      const uploadRes = await fetch(apiUrl, {
+      const uploadRes = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -299,18 +301,18 @@ export default function FilesApp() {
 
       if (!uploadRes.ok) {
         const errText = await uploadRes.text();
-        console.error('Upload failed:', uploadRes.status, errText);
-        throw new Error(`Upload failed (${uploadRes.status}): ${errText.slice(0, 100)}`);
+        console.error('[UPLOAD] Failed:', uploadRes.status, errText);
+        throw new Error(`Upload failed (${uploadRes.status}): ${errText.slice(0, 200)}`);
       }
 
       const result = await uploadRes.json();
-      console.log('Upload successful:', result);
+      console.log('[UPLOAD] Success:', result);
 
       setPreview(null);
       setPrevName("");
       await loadPhotos();
     } catch (e) {
-      console.error('Upload error:', e);
+      console.error('[UPLOAD] Error:', e);
       setError(e?.message || "Upload failed. Please try again.");
     } finally {
       setUploading(false);
