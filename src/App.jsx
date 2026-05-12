@@ -7,6 +7,30 @@ const BORDER = "#2A2A2A";
 const MUTED = "#6B6B6B";
 const MAX_CHARS = 3_400_000;
 
+// ── User ID Management ────────────────────────────────────────────────────────
+function getUserId() {
+  let id = localStorage.getItem("user:id");
+  if (!id) {
+    id = `user_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    localStorage.setItem("user:id", id);
+  }
+  return id;
+}
+
+function getUsername() {
+  let name = localStorage.getItem("user:name");
+  if (!name) {
+    const id = getUserId();
+    name = `User ${id.slice(-4).toUpperCase()}`;
+    localStorage.setItem("user:name", name);
+  }
+  return name;
+}
+
+function setUsername(name) {
+  localStorage.setItem("user:name", name);
+}
+
 // ── Storage adapter: window.storage (Claude) → localStorage fallback ─────────
 const store = {
   async get(key, shared) {
@@ -77,7 +101,7 @@ const CSS = `
   .card:hover{transform:translateY(-3px);border-color:#444}
   .card img{width:100%;display:block}
   .card-label{padding:10px 12px;font-size:12px;border-top:1px solid ${BORDER};
-              display:flex;justify-content:space-between;align-items:center;gap:8px}
+              display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
   .card-name{font-weight:500;color:#F0F0F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .card-date{font-size:11px;color:${MUTED};flex-shrink:0}
   .btn{border-radius:8px;padding:10px 20px;font-family:inherit;font-size:13px;
@@ -117,8 +141,13 @@ export default function FilesApp() {
   const [dragOver, setDragOver]   = useState(false);
   const [selected, setSelected]   = useState(null);
   const [error, setError]         = useState("");
+  const [currentView, setCurrentView] = useState("all"); // "all" or userId
+  const [users, setUsers]         = useState([]);
+  const [username, setUsernameState] = useState(getUsername());
+  const [editingName, setEditingName] = useState(false);
   const fileRef = useRef();
   const pollRef = useRef();
+  const currentUserId = useRef(getUserId()).current;
 
   // Load fonts safely via <link> (not @import inside JS-injected style)
   useEffect(() => {
@@ -133,7 +162,7 @@ export default function FilesApp() {
   const loadPhotos = useCallback(async () => {
     try {
       const idx = await store.get("files:index", true);
-      if (!idx?.value) { setPhotos([]); return; }
+      if (!idx?.value) { setPhotos([]); setUsers([]); return; }
       const list = JSON.parse(idx.value);
       const loaded = await Promise.all(
         list.map(async (item) => {
@@ -141,9 +170,29 @@ export default function FilesApp() {
           return img?.value ? { ...item, src: img.value } : null;
         })
       );
-      setPhotos(loaded.filter(Boolean).reverse());
+      const allPhotos = loaded.filter(Boolean).reverse();
+      setPhotos(allPhotos);
+      
+      // Extract unique users
+      const userMap = {};
+      allPhotos.forEach(photo => {
+        const uid = photo.userId || "anonymous";
+        if (!userMap[uid]) {
+          userMap[uid] = {
+            id: uid,
+            name: photo.username || (uid === "anonymous" ? "Anonymous" : `User ${uid.slice(-4).toUpperCase()}`),
+            count: 0,
+            lastUpload: 0
+          };
+        }
+        userMap[uid].count++;
+        userMap[uid].lastUpload = Math.max(userMap[uid].lastUpload, photo.ts || 0);
+      });
+      
+      setUsers(Object.values(userMap).sort((a, b) => b.lastUpload - a.lastUpload));
     } catch {
       setPhotos([]);
+      setUsers([]);
     } finally {
       setLoading(false);
     }
@@ -183,7 +232,13 @@ export default function FilesApp() {
         if (idx?.value) list = JSON.parse(idx.value);
       } catch {}
 
-      list.push({ id, name: prevName.trim() || "Untitled", ts: Date.now() });
+      list.push({ 
+        id, 
+        name: prevName.trim() || "Untitled", 
+        ts: Date.now(),
+        userId: currentUserId,
+        username: username
+      });
       await store.set("files:index", JSON.stringify(list), true);
 
       setPreview(null);
@@ -208,10 +263,29 @@ export default function FilesApp() {
               Files<span style={{ color:ACCENT }}>.</span>
             </h1>
             <p style={{ fontSize:12, color:MUTED, marginTop:6, letterSpacing:"0.04em" }}>
-              shared photo space — upload anything, seen by everyone
+              shared gallery by multiple users — upload anything, seen by everyone
             </p>
           </div>
-          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+            {editingName ? (
+              <input
+                className="inp"
+                value={username}
+                onChange={(e) => setUsernameState(e.target.value)}
+                onBlur={() => { setUsername(username); setEditingName(false); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { setUsername(username); setEditingName(false); } }}
+                autoFocus
+                style={{ width:120, fontSize:11 }}
+              />
+            ) : (
+              <button
+                className="btn btn-g"
+                onClick={() => setEditingName(true)}
+                style={{ padding:"4px 10px", fontSize:11 }}
+              >
+                👤 {username}
+              </button>
+            )}
             <span className="tag live">● live</span>
             <span className="tag">{photos.length} files</span>
           </div>
@@ -224,7 +298,7 @@ export default function FilesApp() {
             <div className="viewer-bar">
               <div>
                 <span style={{ fontWeight:500, color:"#F0F0F0", fontSize:14 }}>{selected.name}</span>
-                <span style={{ fontSize:12, color:MUTED, marginLeft:12 }}>{timeAgo(selected.ts)}</span>
+                <span style={{ fontSize:12, color:MUTED, marginLeft:12 }}>by <strong>{selected.username || (selected.userId || "anonymous").slice(-4).toUpperCase()}</strong> • {timeAgo(selected.ts)}</span>
               </div>
               <button className="btn btn-g" style={{ padding:"6px 14px", fontSize:12 }} onClick={() => setSelected(null)}>
                 ✕ Close
@@ -281,6 +355,35 @@ export default function FilesApp() {
         {/* Divider */}
         <div style={{ borderTop:`1px solid ${BORDER}`, margin:"2rem 0", position:"relative" }}>
           <span style={{ position:"absolute", top:-10, left:0, background:DARK, paddingRight:12,
+                        fontSize:11, color:MUTED, letterSpacing:"0.08em" }}>USERS</span>
+        </div>
+
+        {/* Users list */}
+        {loading ? null : (
+          <div style={{ display:"flex", gap:8, marginBottom:"2rem", flexWrap:"wrap", overflowX:"auto", paddingBottom:8 }}>
+            <button
+              className={`btn ${currentView === "all" ? "btn-y" : "btn-g"}`}
+              onClick={() => setCurrentView("all")}
+              style={{ padding:"8px 16px", fontSize:12 }}
+            >
+              🌍 All ({photos.length})
+            </button>
+            {users.map(user => (
+              <button
+                key={user.id}
+                className={`btn ${currentView === user.id ? "btn-y" : "btn-g"}`}
+                onClick={() => setCurrentView(user.id)}
+                style={{ padding:"8px 16px", fontSize:12 }}
+              >
+                {user.name} ({user.count})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Divider */}
+        <div style={{ borderTop:`1px solid ${BORDER}`, margin:"2rem 0", position:"relative" }}>
+          <span style={{ position:"absolute", top:-10, left:0, background:DARK, paddingRight:12,
                         fontSize:11, color:MUTED, letterSpacing:"0.08em" }}>GALLERY</span>
         </div>
 
@@ -290,25 +393,31 @@ export default function FilesApp() {
             <div className="spin" style={{ width:24, height:24, margin:"0 auto 12px" }} />
             <p style={{ fontSize:13 }}>Loading photos…</p>
           </div>
-        ) : photos.length === 0 ? (
-          <div className="empty">
-            <div style={{ fontSize:48, marginBottom:16, opacity:.3 }}>🖼</div>
-            <p style={{ fontSize:14 }}>No photos yet.</p>
-            <p style={{ fontSize:12, marginTop:6 }}>Be the first to upload one.</p>
-          </div>
-        ) : (
-          <div className="grid">
-            {photos.map((p) => (
-              <div key={p.id} className="card" onClick={() => setSelected(p)}>
-                <img src={p.src} alt={p.name} loading="lazy" />
-                <div className="card-label">
-                  <span className="card-name">{p.name}</span>
-                  <span className="card-date">{timeAgo(p.ts)}</span>
+        ) : (() => {
+          const filteredPhotos = currentView === "all" ? photos : photos.filter(p => (p.userId || "anonymous") === currentView);
+          return filteredPhotos.length === 0 ? (
+            <div className="empty">
+              <div style={{ fontSize:48, marginBottom:16, opacity:.3 }}>🖼</div>
+              <p style={{ fontSize:14 }}>No photos found.</p>
+              <p style={{ fontSize:12, marginTop:6 }}>{currentView === "all" ? "Be the first to upload one." : "This user hasn't uploaded any photos yet."}</p>
+            </div>
+          ) : (
+            <div className="grid">
+              {filteredPhotos.map((p) => (
+                <div key={p.id} className="card" onClick={() => setSelected(p)}>
+                  <img src={p.src} alt={p.name} loading="lazy" />
+                  <div className="card-label">
+                    <div style={{ flex:1 }}>
+                      <span className="card-name">{p.name}</span>
+                      <div style={{ fontSize:10, color:MUTED, marginTop:2 }}>by {p.username || (p.userId || "anonymous").slice(-4).toUpperCase()}</div>
+                    </div>
+                    <span className="card-date">{timeAgo(p.ts)}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </>
   );
