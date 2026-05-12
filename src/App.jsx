@@ -31,26 +31,58 @@ function setUsername(name) {
   localStorage.setItem("user:name", name);
 }
 
-// ── Storage adapter: window.storage (Claude) → localStorage fallback ─────────
+// ── API Configuration ────────────────────────────────────────────────────────
+const API_URL = "http://localhost:3000";
+
+// ── Storage adapter: Use API server → localStorage fallback ──────────────────
 const store = {
   async get(key, shared) {
     try {
-      if (typeof window.storage?.get === "function") {
-        return await window.storage.get(key, shared);
+      if (shared && key === "files:index") {
+        // Load from API server
+        const res = await fetch(`${API_URL}/api/photos`, { mode: "cors" });
+        if (res.ok) {
+          const photos = await res.json();
+          return { value: JSON.stringify(photos) };
+        }
       }
+      // Fallback to localStorage
       const v = localStorage.getItem(key);
       return v ? { value: v } : null;
-    } catch { return null; }
+    } catch {
+      // Fallback to localStorage
+      const v = localStorage.getItem(key);
+      return v ? { value: v } : null;
+    }
   },
+  
   async set(key, value, shared) {
     try {
-      if (typeof window.storage?.set === "function") {
-        return await window.storage.set(key, value, shared);
+      if (shared && key === "files:index") {
+        // Save to API server via POST
+        const photos = JSON.parse(value);
+        for (const photo of photos) {
+          // Only upload new photos (those without a server ack)
+          if (!photo._uploaded) {
+            await fetch(`${API_URL}/api/photos`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(photo),
+              mode: "cors"
+            });
+          }
+        }
+        return { value };
       }
+      // For non-shared data, use localStorage
       localStorage.setItem(key, value);
       return { value };
-    } catch { return null; }
-  },
+    } catch (error) {
+      // Fallback: save to localStorage
+      localStorage.setItem(key, value);
+      return { value };
+    }
+  }
 };
 
 // ── Image compression ─────────────────────────────────────────────────────────
@@ -161,21 +193,18 @@ export default function FilesApp() {
 
   const loadPhotos = useCallback(async () => {
     try {
-      const idx = await store.get("files:index", true);
-      if (!idx?.value) { setPhotos([]); setUsers([]); return; }
-      const list = JSON.parse(idx.value);
-      const loaded = await Promise.all(
-        list.map(async (item) => {
-          const img = await store.get(`files:photo:${item.id}`, true);
-          return img?.value ? { ...item, src: img.value } : null;
-        })
-      );
-      const allPhotos = loaded.filter(Boolean).reverse();
-      setPhotos(allPhotos);
+      const res = await fetch(`${API_URL}/api/photos`, { mode: "cors" });
+      if (!res.ok) throw new Error("Failed to fetch photos");
+      
+      const allPhotos = (await res.json()).reverse();
+      
+      // Filter out any null/invalid photos
+      const validPhotos = allPhotos.filter(p => p && p.src && p.id);
+      setPhotos(validPhotos);
       
       // Extract unique users
       const userMap = {};
-      allPhotos.forEach(photo => {
+      validPhotos.forEach(photo => {
         const uid = photo.userId || "anonymous";
         if (!userMap[uid]) {
           userMap[uid] = {
@@ -190,9 +219,16 @@ export default function FilesApp() {
       });
       
       setUsers(Object.values(userMap).sort((a, b) => b.lastUpload - a.lastUpload));
-    } catch {
-      setPhotos([]);
-      setUsers([]);
+    } catch (error) {
+      console.error("Failed to load photos:", error);
+      // Try fallback from localStorage
+      try {
+        const idx = await store.get("files:index", true);
+        if (idx?.value) {
+          const list = JSON.parse(idx.value);
+          setPhotos(list.reverse());
+        }
+      } catch {}
     } finally {
       setLoading(false);
     }
@@ -223,23 +259,24 @@ export default function FilesApp() {
       const compressed = await compress(preview);
       const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-      const saved = await store.set(`files:photo:${id}`, compressed, true);
-      if (!saved) throw new Error("Could not save image. It may be too large.");
-
-      let list = [];
-      try {
-        const idx = await store.get("files:index", true);
-        if (idx?.value) list = JSON.parse(idx.value);
-      } catch {}
-
-      list.push({ 
-        id, 
-        name: prevName.trim() || "Untitled", 
-        ts: Date.now(),
-        userId: currentUserId,
-        username: username
+      // Upload directly to API server
+      const uploadRes = await fetch(`${API_URL}/api/photos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          name: prevName.trim() || "Untitled",
+          ts: Date.now(),
+          userId: currentUserId,
+          username: username,
+          imageData: compressed
+        }),
+        mode: "cors"
       });
-      await store.set("files:index", JSON.stringify(list), true);
+
+      if (!uploadRes.ok) {
+        throw new Error("Failed to upload to server");
+      }
 
       setPreview(null);
       setPrevName("");
